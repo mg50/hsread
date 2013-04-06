@@ -8,11 +8,10 @@ import System.Process (runCommand)
 import Control.Monad (forM_)
 
 newtype Regex = Regex { toString :: String }
-data Message = Unit Int | Integration Int deriving (Show)
+data Message = Unit Int | Integration Int | Other String deriving (Show)
 type Scanner a = String -> ScanData a
-type ScanAnalyzer a = ScanData a -> Maybe Message
-data ScanPair = RegexPair { toPair :: (Scanner Regex, ScanAnalyzer Regex)}
-type MessageAnalyzer = [ScanPair]
+type Analyzer a = ScanData a -> Maybe Message
+type Behavior = [String -> Maybe Message]
 
 class Scannable a where
   type ScanData a :: *
@@ -24,23 +23,23 @@ instance Scannable Regex where
 
 ---------------------------------------------------------
 
-parseMessage :: String -> MessageAnalyzer -> Maybe Message
+parseMessage :: String -> Behavior -> Maybe Message
 parseMessage str [] = Nothing
-parseMessage str (a:as) = let (scan, analyze) = toPair a
-                          in case analyze (scan str) of
+parseMessage str (a:as) = case a str of
                             Just msg -> Just msg
                             Nothing -> parseMessage str as
 
 format :: Message -> String
 format (Unit n) = "Unit tests complete.. " ++ show n ++ " failures."
 format (Integration n) = "Integration tests complete.. " ++ show n ++ " failures."
+format (Other s) = s
 
 ---------------------------------------------------------
 
 scanUnitTests :: Scanner Regex
 scanUnitTests = scanWith $ Regex "([0-9]+) failures"
 
-analyzeUnitTests :: ScanAnalyzer Regex
+analyzeUnitTests :: Analyzer Regex
 analyzeUnitTests matches | null matches = Nothing
                          | otherwise = (Just . Unit . read) $ matches !! 0 !! 1
 
@@ -48,21 +47,25 @@ analyzeUnitTests matches | null matches = Nothing
 scanIntegrationTests :: Scanner Regex
 scanIntegrationTests = scanWith $ Regex "[0-9]+ steps.*\\((?:([0-9]+)? failed)?"
 
-analyzeIntegrationTests :: ScanAnalyzer Regex
+analyzeIntegrationTests :: Analyzer Regex
 analyzeIntegrationTests matches | null matches = Nothing
                                 | otherwise = case matches !! 0 !! 1 of
                                                 "" -> (Just . Integration) 0
                                                 n  -> (Just . Integration . read) n
 
-analyzer :: MessageAnalyzer
-analyzer = [RegexPair (scanUnitTests, analyzeUnitTests),
-            RegexPair (scanIntegrationTests, analyzeIntegrationTests)]
+defaultBehavior :: Behavior
+defaultBehavior = [ analyzeUnitTests . scanUnitTests,
+                    analyzeIntegrationTests . scanIntegrationTests]
 
 ---------------------------------------------------------
 
+vocalize :: Message -> IO ()
+vocalize message = do runCommand $ "say -v Sangeeta " ++ format message
+                      return ()
+
 main = do input <- getContents
           forM_ (lines input) $ \line ->
-            case parseMessage line analyzer of
-              Just message -> do runCommand $ "say -v Sangeeta " ++ format message
-                                 return ()
+            case parseMessage line defaultBehavior of
+              Just message -> vocalize message
               Nothing -> return ()
+          vocalize $ Other "Operation complete."
