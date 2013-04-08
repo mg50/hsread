@@ -29,33 +29,41 @@ parseMessage str (a:as) = case a str of
                             Just msg -> Just msg
                             Nothing -> parseMessage str as
 
+plural :: Int -> String
+plural n = if n == 1 then "" else "s"
+
 format :: Message -> String
-format (Unit n) = "Unit tests complete.. " ++ show n ++ " failures."
-format (Integration n) = "Integration tests complete.. " ++ show n ++ " failures."
+format (Unit n) = "Unit tests complete.. " ++ show n ++ " failure" ++ plural n
+format (Integration n) = "Integration tests complete.. " ++ show n ++ " failure" ++ plural n
 format (Other s) = s
 
 ---------------------------------------------------------
 
-scanUnitTests :: Scanner Regex
 scanUnitTests = scanWith $ Regex "([0-9]+) failures"
-
-analyzeUnitTests :: Analyzer Regex
 analyzeUnitTests matches | null matches = Nothing
                          | otherwise = (Just . Unit . read) $ matches !! 0 !! 1
 
 
-scanIntegrationTests :: Scanner Regex
-scanIntegrationTests = scanWith $ Regex "[0-9]+ steps.*\\((?:([0-9]+)? failed)?"
-
-analyzeIntegrationTests :: Analyzer Regex
+scanIntegrationTests = scanWith $ Regex "[0-9]+ steps.*\\((?:([0-9]+) failed)?"
 analyzeIntegrationTests matches | null matches = Nothing
                                 | otherwise = case matches !! 0 !! 1 of
                                                 "" -> (Just . Integration) 0
                                                 n  -> (Just . Integration . read) n
 
+scanMigrationStart = scanWith $ Regex "Loading db/seeds\\.sql"
+analyzeMigrationStart matches | null matches = Nothing
+                              | otherwise = (Just . Other) "Beginning migrations."
+
+scanUnitTestStart = scanWith $ Regex "rspec"
+analyzeUnitTestStart matches | null matches = Nothing
+                             | otherwise = (Just . Other) "Migrations complete. Beginning unit tests."
+
+
 defaultBehavior :: Behavior
-defaultBehavior = [ analyzeUnitTests . scanUnitTests,
-                    analyzeIntegrationTests . scanIntegrationTests]
+defaultBehavior = [analyzeUnitTests . scanUnitTests,
+                   analyzeIntegrationTests . scanIntegrationTests,
+                   analyzeMigrationStart . scanMigrationStart,
+                   analyzeUnitTestStart . scanUnitTestStart]
 
 ---------------------------------------------------------
 
