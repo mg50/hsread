@@ -4,14 +4,14 @@
 module Main where
 import System.IO (getContents)
 import Text.Regex.PCRE ((=~))
-import System.Process (runCommand)
+import System.Process (runCommand, waitForProcess)
 import Control.Monad (forM_)
 import Control.Concurrent
 import Control.Monad.Trans
 import Control.Monad.Trans.Reader
 import System.Directory (getCurrentDirectory)
 import Data.List.Split (splitOn)
-
+import Control.Concurrent.Chan
 ---------------------------------------------------------
 
 data Context = Context { folder :: String } deriving (Show)
@@ -92,7 +92,8 @@ defaultBehavior = [analyzeUnitTests . scanUnitTests,
 
 vocalize :: (MonadIO a) => Message -> ReaderT Context a ()
 vocalize message = do msg <- format message
-                      liftIO $ runCommand $ "say -v Sangeeta " ++ msg
+                      pid <- liftIO $ runCommand $ "say -v Sangeeta " ++ msg
+                      liftIO $ waitForProcess pid
                       return ()
 
 getContext :: IO Context
@@ -100,10 +101,22 @@ getContext = do cwd <- getCurrentDirectory
                 let folder = last $ splitOn "/"  cwd
                 return $ Context{folder = folder}
 
+vocalizeLoop :: Chan (Maybe Message) -> MVar () -> IO ()
+vocalizeLoop chan done = do context <- getContext
+                            t <- readChan chan
+                            case t of
+                              Just message -> do runReaderT (vocalize message) context
+                                                 vocalizeLoop chan done
+                              Nothing -> putMVar done ()
+
 main :: IO ()
 main = do input <- getContents
-          context <- getContext
+          messageQueue <- newChan
+          done <- newEmptyMVar
+          forkIO $ vocalizeLoop messageQueue done
           forM_ (lines input) $ \line ->
             case parseMessage line defaultBehavior of
-              Just message -> runReaderT (vocalize message) context
+              Just message -> writeChan messageQueue (Just message)
               Nothing -> return ()
+          writeChan messageQueue Nothing
+          takeMVar done
