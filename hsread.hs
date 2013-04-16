@@ -6,9 +6,24 @@ import System.IO (getContents)
 import Text.Regex.PCRE ((=~))
 import System.Process (runCommand)
 import Control.Monad (forM_)
+import Control.Concurrent
+import Control.Monad.Trans
+import Control.Monad.Trans.Reader
+import System.Directory (getCurrentDirectory)
+import Data.List.Split (splitOn)
+
+---------------------------------------------------------
+
+data Context = Context { folder :: String } deriving (Show)
 
 newtype Regex = Regex { toString :: String }
-data Message = Unit Int | Integration Int | Other String deriving (Show)
+data Message = Unit Int
+             | Integration Int
+             | BeginningMigrations
+             | FinishedMigrations
+             | Other String
+             deriving (Show)
+
 type Scanner a = String -> ScanData a
 type Analyzer a = ScanData a -> Maybe Message
 type Behavior = [String -> Maybe Message]
@@ -32,14 +47,22 @@ parseMessage str (a:as) = case a str of
 plural :: Int -> String
 plural n = if n == 1 then "" else "s"
 
-format :: Message -> String
-format (Unit n) = "Unit tests complete.. " ++ show n ++ " failure" ++ plural n
-format (Integration n) = "Integration tests complete.. " ++ show n ++ " failure" ++ plural n
-format (Other s) = s
+format :: (Monad a) => Message -> ReaderT Context a String
+format (Unit n)            = do f <- asks folder
+                                return $ f ++ " unit tests complete.. " ++
+                                         show n ++ " failure" ++ plural n
+format (Integration n)     = do f <- asks folder
+                                return $ f ++ " integration tests complete.. " ++
+                                         show n ++ " failure" ++ plural n
+format BeginningMigrations = do f <- asks folder
+                                return $ "Beginning " ++ f ++ " migrations."
+format FinishedMigrations  = do f <- asks folder
+                                return $ f ++ " migrations complete. Beginning " ++ f ++ " unit tests."
+format (Other s)           = return s
 
 ---------------------------------------------------------
 
-scanUnitTests = scanWith $ Regex "([0-9]+) failures"
+scanUnitTests = scanWith $ Regex "([0-9]+) failure"
 analyzeUnitTests matches | null matches = Nothing
                          | otherwise = (Just . Unit . read) $ matches !! 0 !! 1
 
@@ -52,11 +75,11 @@ analyzeIntegrationTests matches | null matches = Nothing
 
 scanMigrationStart = scanWith $ Regex "Loading db/seeds\\.sql"
 analyzeMigrationStart matches | null matches = Nothing
-                              | otherwise = (Just . Other) "Beginning migrations."
+                              | otherwise = Just BeginningMigrations
 
-scanUnitTestStart = scanWith $ Regex "rspec"
+scanUnitTestStart = scanWith $ Regex "-S rspec"
 analyzeUnitTestStart matches | null matches = Nothing
-                             | otherwise = (Just . Other) "Migrations complete. Beginning unit tests."
+                             | otherwise = Just FinishedMigrations
 
 
 defaultBehavior :: Behavior
@@ -67,13 +90,20 @@ defaultBehavior = [analyzeUnitTests . scanUnitTests,
 
 ---------------------------------------------------------
 
-vocalize :: Message -> IO ()
-vocalize message = do runCommand $ "say -v Sangeeta " ++ format message
+vocalize :: (MonadIO a) => Message -> ReaderT Context a ()
+vocalize message = do msg <- format message
+                      liftIO $ runCommand $ "say -v Sangeeta " ++ msg
                       return ()
 
+getContext :: IO Context
+getContext = do cwd <- getCurrentDirectory
+                let folder = last $ splitOn "/"  cwd
+                return $ Context{folder = folder}
+
+main :: IO ()
 main = do input <- getContents
+          context <- getContext
           forM_ (lines input) $ \line ->
             case parseMessage line defaultBehavior of
-              Just message -> vocalize message
+              Just message -> runReaderT (vocalize message) context
               Nothing -> return ()
-          vocalize $ Other "Operation complete."
